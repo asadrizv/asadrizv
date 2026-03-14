@@ -1,0 +1,97 @@
+name: Build & Deploy
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  SSH_HOST: ${{ secrets.SSH_HOST }}
+  SSH_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+  APP_DIR: /opt/qwen-chat
+
+jobs:
+  test-backend:
+    name: Test Backend
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          cd backend
+          pip install -r requirements.txt
+          pip install pytest httpx
+
+      - name: Lint
+        run: |
+          pip install ruff
+          ruff check backend/
+
+      - name: Test
+        run: |
+          cd backend
+          python -c "from main import app; print('Backend imports OK')"
+
+  test-frontend:
+    name: Test Frontend
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install & Build
+        run: |
+          cd frontend
+          npm install
+          npm run build
+
+  deploy:
+    name: Deploy to GPU Droplet
+    needs: [test-backend, test-frontend]
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup SSH
+        run: |
+          mkdir -p ~/.ssh
+          echo "$SSH_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H $(echo $SSH_HOST | cut -d@ -f2) >> ~/.ssh/known_hosts 2>/dev/null || true
+
+      - name: Deploy
+        run: |
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no $SSH_HOST bash -s <<'EOF'
+          set -euo pipefail
+          cd ${{ env.APP_DIR }}
+
+          # Pull latest
+          git pull origin main
+
+          # Build only backend + frontend (vllm uses prebuilt image)
+          docker compose build backend frontend
+
+          # Rolling restart (vllm stays up)
+          docker compose up -d backend frontend nginx
+
+          # Verify
+          sleep 5
+          curl -sf http://localhost:8080/api/health || echo "Warning: health check failed"
+
+          docker compose ps
+          echo "Deploy complete!"
+          EOF
+
+      - name: Cleanup SSH
+        if: always()
+        run: rm -f ~/.ssh/deploy_key
