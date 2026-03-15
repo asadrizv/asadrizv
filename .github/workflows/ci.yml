@@ -1,12 +1,13 @@
-name: Deploy
+name: CI
 
 on:
   push:
     branches: [main]
+  pull_request:
+    branches: [main]
 
 jobs:
-  ci:
-    name: Build & Test
+  backend:
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -30,33 +31,27 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Backend - Install & check
+      - name: Install dependencies
         working-directory: backend
-        run: |
-          pip install -r requirements.txt
-          python -m py_compile app/main.py
+        run: pip install -r requirements.txt
+
+      - name: Check syntax
+        working-directory: backend
+        run: python -m py_compile app/main.py
+
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
 
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
 
-      - name: Frontend - Install & build
+      - name: Install dependencies
         working-directory: frontend
-        run: |
-          npm install
-          npm run build
+        run: npm install
 
-  deploy:
-    name: Deploy to Railway
-    needs: ci
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install Railway CLI
-        run: npm i -g @railway/cli
-
-      - name: Deploy
-        env:
-          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
-        run: railway up --detach
+      - name: Build
+        working-directory: frontend
+        run: npm run build
