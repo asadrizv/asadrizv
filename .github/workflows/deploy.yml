@@ -1,0 +1,70 @@
+name: Deploy to Railway
+
+on:
+  push:
+    branches:
+      - main
+      - claude/shore-pakistan-replica-9W8fw
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  smoke-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Import smoke test
+        run: python -c "from backend.main import app; print('OK', len(app.routes), 'routes')"
+
+  deploy:
+    needs: smoke-test
+    runs-on: ubuntu-latest
+    env:
+      RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify RAILWAY_TOKEN is set
+        run: |
+          if [ -z "$RAILWAY_TOKEN" ]; then
+            echo "::error::RAILWAY_TOKEN secret is not set. Add it under Settings → Secrets and variables → Actions."
+            exit 1
+          fi
+          echo "RAILWAY_TOKEN length: ${#RAILWAY_TOKEN}"
+
+      - name: Install Railway CLI
+        run: |
+          curl -fsSL https://railway.com/install.sh | sh
+          echo "$HOME/.railway/bin" >> $GITHUB_PATH
+
+      - name: Show Railway CLI version
+        run: railway --version
+
+      - name: Deploy
+        env:
+          RAILWAY_SERVICE: ${{ secrets.RAILWAY_SERVICE }}
+        run: |
+          if [ -n "$RAILWAY_SERVICE" ]; then
+            railway up --service "$RAILWAY_SERVICE" --ci
+          else
+            railway up --ci
+          fi
+
+      - name: Print deployment URL
+        if: success()
+        run: |
+          railway status || true
+          railway domain || true
